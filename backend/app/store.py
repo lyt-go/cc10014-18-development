@@ -25,7 +25,8 @@ class Store:
 
     # ── 基础访问 ──
     def module_names(self) -> list[str]:
-        return sorted(self._tables)
+        # 以下划线开头的表是领域内部账（如导入回执、核验清单），不算业务模块。
+        return sorted(name for name in self._tables if not name.startswith("_"))
 
     def rows(self, module: str) -> list[dict[str, Any]]:
         return self._tables.setdefault(module, [])

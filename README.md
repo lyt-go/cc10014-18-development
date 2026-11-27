@@ -11,12 +11,17 @@
 .
 ├── frontend/                 Vue 3 + Vite + TypeScript 前端
 │   ├── src/views/WorkbenchView.vue|tsx  全部模块共享工作台
+│   ├── src/components/DrawingImportPanel.vue  图纸批量导入/预检/回执面板
+│   ├── src/components/DrawingEvidencePicker.vue 构件登记核验清单选图
+│   ├── src/components/DrawingEvidenceList.vue 已领用附件查询
 │   ├── src/data/modules.ts              18个业务模块配置
 │   ├── src/api/              统一请求封装
 │   └── vite.config.ts        dev server 配置（open: false）
 ├── backend/                  FastAPI（Python） 后端
 │   ├── app/routers/resource.py  通用查询/导出/登记/动作接口
+│   ├── app/routers/drawing_import.py  图纸预检/导入回执/核验清单/领图接口
 │   ├── app/services/<key>.py    每个模块独立领域逻辑
+│   ├── app/services/drawing_import.py  图纸身份、版次与发布同步
 │   ├── app/services/base.py     共享服务骨架
 │   └── app/store.py          内存数据仓库与示例数据
 ├── .gitignore
@@ -56,8 +61,8 @@ npm run dev
 | 工匠分配 | `craftsman_assign` | 工匠分配单 | 工匠姓名、技艺类别、资质等级 |
 | 工序编排 | `work_sequence` | 工序卡 | 工序名称、前置工序、所需工匠 |
 | 质量检查 | `quality_inspect` | 检查记录 | 检查工序、检查项目、技术标准 |
-| 历史图纸 | `historical_drawing` | 历史图纸 | 图纸编号、绘制年代、绘制内容 |
-| 构件登记 | `component_registry` | 构件档案 | 构件名称、所属建筑、材质类型 |
+| 历史图纸 | `historical_drawing` | 历史图纸 | 图纸编号、绘制年代、覆盖部位、版次、附件 |
+| 构件登记 | `component_registry` | 构件档案 | 构件名称、所属建筑、材质类型、图纸证据 |
 | 环境监测 | `env_monitor` | 监测数据 | 监测位置、温度读数、湿度读数 |
 | 修缮日志 | `restoration_log` | 施工日志 | 施工日期、对应工序、施工内容 |
 | 验收记录 | `acceptance_record` | 验收报告 | 验收工序、验收标准、验收结论 |
@@ -68,6 +73,33 @@ npm run dev
 | 施工排期 | `construction_schedule` | 排期计划 | 计划工序、开始日期、结束日期 |
 | 变更签证 | `change_order` | 变更签证单 | 变更事项、变更原因、影响工序 |
 | 竣工总结 | `completion_summary` | 竣工报告 | 修缮项目、开工日期、竣工日期 |
+
+## 历史图纸批量导入
+
+历史图纸支持逐份登记和批量导入两条路径。批量导入先预检再确认导入：
+
+1. `POST /api/historical_drawing/import/precheck` 预检清单（CSV/TSV 文本或行数组），
+   逐行返回结果与错误，**不创建图纸**；失败行保留原始文件行号。
+2. `POST /api/historical_drawing/import/commit` 确认导入，通过行发布图纸并生成导入回执
+   （`/api/historical_drawing/import/receipts`），同时把发布结果同步到
+   `GET /api/component_registry/checklist` 构件登记核验清单。
+3. 构件登记从核验清单选用图纸证据（`POST /api/component_registry/claim` 领图，
+   `GET /api/component_registry/evidence` 查已领用附件），登记提交时按提交时实际
+   生效的版次落库。
+
+关键口径：
+
+- **图纸身份 = 图纸编号 + 绘制年代 + 覆盖部位**。两份同编号图纸若年代或覆盖部位
+  不同就是两份图纸，单凭编号不能合并；填编号时须同时给出年代与部位。
+- **预检中的图纸不会进入核验清单**，新的构件登记也选不到。
+- **重复导入同一行只记一个图纸身份**，已发布的图纸直接复用，不重复建图。
+- **同身份更高版次按修订发布**：旧版次转为“已替代”仍可查询，每个身份只有一个
+  有效版次；修订版发布后，之前领用的旧附件保留可查（`已替代` 标记）。
+- **领图没有有效凭据不阻断办理**，记为“待补领”后可继续登记；凭据来自导入回执。
+- 确认导入、修订发布、领图和登记提交共用同一把发布锁，所以构件员提交的是当时
+  实际生效的覆盖版次，而不是领图时的快照。
+- 附件仅接受单个图纸文件（pdf/jpg/jpeg/png/tif/tiff）；无效附件在预检与导入回执
+  中都保留原行号与错误，修正后再次导入即可。
 
 ## 约定
 

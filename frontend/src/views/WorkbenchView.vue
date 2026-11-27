@@ -15,6 +15,9 @@
       </div>
     </header>
 
+    <DrawingImportPanel v-if="meta.key === 'historical_drawing'" />
+    <DrawingEvidenceList v-if="meta.key === 'component_registry'" />
+
     <div class="stat-row">
       <article v-for="item in stats" :key="item.label" class="stat-card">
         <span class="stat-label">{{ item.label }}</span>
@@ -78,10 +81,29 @@
     <div v-if="showCreate" class="modal-backdrop" data-testid="create-modal">
       <form class="modal" @submit.prevent="submitCreate">
         <h3>登记{{ meta.entity }}</h3>
-        <label v-for="field in meta.fields" :key="field" class="create-field">
+        <label
+          v-for="field in createFields"
+          :key="field"
+          class="create-field"
+        >
           <span>{{ field }}</span>
-          <input v-model="createValues[field]" :data-testid="`create-${field}`" required />
+          <input
+            v-model="createValues[field]"
+            :data-testid="`create-${field}`"
+            :required="isCreateRequired(field)"
+            :readonly="isDerivedField(field)"
+          />
         </label>
+        <DrawingEvidencePicker
+          v-if="meta.key === 'component_registry'"
+          :component-name="createValues['构件名称']"
+          @evidence="applyEvidence"
+          @token="applyToken"
+        />
+        <p v-if="meta.key === 'component_registry'" class="picker-desc">
+          引用图纸为选填项：从核验清单选用后自动回填；不引用图纸也可登记构件。
+          同编号不同年代或区域的图纸在清单中分列，按覆盖部位选取。
+        </p>
         <div class="page-actions">
           <button class="btn" type="button" @click="showCreate = false">取消</button>
           <button class="btn primary" data-testid="submit-create" type="submit" :disabled="creating">
@@ -107,7 +129,11 @@ import {
   moduleMeta,
   runAction as applyAction,
 } from '@/api/backend-service'
-import type { EntryRow } from '@/data/types'
+import { DRAWING_REFERENCE_FIELDS, OPTIONAL_CREATE_FIELDS } from '@/data/modules'
+import type { EntryRow, EvidenceItem } from '@/data/types'
+import DrawingEvidencePicker from '@/components/DrawingEvidencePicker.vue'
+import DrawingImportPanel from '@/components/DrawingImportPanel.vue'
+import DrawingEvidenceList from '@/components/DrawingEvidenceList.vue'
 
 const props = defineProps<{ moduleKey: string }>()
 const meta = moduleMeta(props.moduleKey)
@@ -119,6 +145,26 @@ const filterFields = meta.fields.slice(0, 3)
 const showCreate = ref(false)
 const creating = ref(false)
 const createValues = ref<Record<string, string>>({})
+
+// 构件登记的图纸引用字段由核验清单回填，表单里只读展示，避免与清单口径不一致。
+const hiddenCreateFields = new Set(['图纸ID'])
+const createFields = computed(() => meta.fields.filter((field) => !hiddenCreateFields.has(field)))
+const optionalCreateFields = new Set(OPTIONAL_CREATE_FIELDS[meta.key] ?? [])
+
+function isCreateRequired(field: string): boolean {
+  return !optionalCreateFields.has(field) && !isDrawingReference(field)
+}
+
+function isDrawingReference(field: string): boolean {
+  return meta.key === 'component_registry' && DRAWING_REFERENCE_FIELDS.includes(field)
+}
+
+// 版次、附件、证据号与图纸ID只能由核验清单回填，手填容易和清单口径不一致。
+const derivedFields = new Set(['图纸版次', '图纸证据', '图纸证据ID', '图纸ID'])
+
+function isDerivedField(field: string): boolean {
+  return meta.key === 'component_registry' && derivedFields.has(field)
+}
 
 const stats = computed(() => [
   { label: meta.metrics[0], value: total.value },
@@ -142,6 +188,20 @@ function openCreate() {
   createValues.value = Object.fromEntries(meta.fields.map((f) => [f, '']))
   errorMessage.value = ''
   showCreate.value = true
+}
+
+// 领图凭据一并带上；无有效凭据也可继续办理，由后端记为待补领。
+function applyToken(value: string) {
+  createValues.value['图纸凭据'] = value
+}
+
+// 选取核验清单中的图纸证据：回填引用字段，提交时后端再解析实际生效版次。
+function applyEvidence(evidence: EvidenceItem) {
+  createValues.value['图纸证据ID'] = String(evidence.id)
+  createValues.value['图纸编号'] = String(evidence.图纸编号 ?? '')
+  createValues.value['绘制年代'] = String(evidence.绘制年代 ?? '')
+  createValues.value['覆盖部位'] = String(evidence.覆盖部位 ?? '')
+  createValues.value['图纸ID'] = String(evidence.图纸ID ?? '')
 }
 
 async function submitCreate() {

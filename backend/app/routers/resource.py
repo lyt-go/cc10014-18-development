@@ -88,7 +88,15 @@ def create_entry(module: str, payload: EntryPayload) -> ActionResult:
     service = require_service(module)
     entry, missing = service.create_entry(payload.values)
     if missing:
-        return ActionResult(ok=False, message=f"缺少必填字段：{'、'.join(missing)}")
+        required = [field for field in missing if field in service.REQUIRED_FIELDS]
+        if required:
+            message = f"缺少必填字段：{'、'.join(required)}"
+            extra = [field for field in missing if field not in required]
+            if extra:
+                message = f"{message}；{'；'.join(extra)}"
+        else:
+            message = "；".join(missing)
+        return ActionResult(ok=False, message=message)
     return ActionResult(ok=True, message=f"{service.ENTITY}已登记", entry=entry)
 
 
@@ -168,6 +176,18 @@ def get_dependent_status(module: str, entry_id: int) -> dict[str, Any]:
             if qi.get("检查工序", "") == process:
                 result["upstream"].append({"module": "quality_inspect", "id": qi.get("id"),
                     "name": qi.get("检查工序"), "status": qi.get("status")})
+    elif module == "component_registry":
+        identity = str(entry.get("图纸身份", ""))
+        for drawing in store.rows("historical_drawing"):
+            if identity and drawing.get("图纸身份") == identity and drawing.get("有效版次"):
+                result["upstream"].append({"module": "historical_drawing", "id": drawing.get("id"),
+                    "name": f"{drawing.get('图纸编号')} {drawing.get('绘制年代')} {drawing.get('覆盖部位')} 版次{drawing.get('版次')}",
+                    "status": "有效版次"})
+        for evidence in store.rows("_drawing_evidence"):
+            if entry.get("图纸证据ID") and evidence.get("id") == entry.get("图纸证据ID"):
+                result["upstream"].append({"module": "historical_drawing", "id": evidence.get("id"),
+                    "name": f"领用附件 {evidence.get('领用附件')}",
+                    "status": str(evidence.get("状态"))})
     elif module == "construction_schedule":
         process = entry.get("计划工序", "")
         for co in store.rows("change_order"):
@@ -219,6 +239,8 @@ def dependency_graph() -> dict[str, Any]:
         {"from": "construction_schedule", "to": "completion_summary", "label": "全部排期完成==竣工"},
         {"from": "material_verify", "to": "work_sequence", "label": "材料签认解锁工序"},
         {"from": "restoration_log", "to": "work_sequence", "label": "全部日志归档==完成"},
+        {"from": "historical_drawing", "to": "component_registry", "label": "导入发布图纸==构件核验清单"},
+        {"from": "component_registry", "to": "historical_drawing", "label": "构件登记选用有效版次图纸"},
 
     ]
     return graph
